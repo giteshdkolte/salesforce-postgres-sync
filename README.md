@@ -43,19 +43,21 @@ This pipeline reads configurations from the `target_objects` section of the YAML
 - After each job completes, it writes detailed row-level results (success/failure, new ID, error messages) and a final summary record to dedicated log tables in Postgres.
 
 ## Setup
+1.  **Install Python:**
+    Python 3.9.10 
 
-1.  **Clone the repository:**
+2.  **Clone the repository:**
     ```bash
     git clone https://github.com/giteshdkolte/salesforce-postgres-sync.git
     cd salesforce-postgres-sync
     ```
 
-2.  **Install dependencies:**
+3.  **Install dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
 
-3.  **Create an environment file:**
+4.  **Create an environment file:**
     Create a `.env` file in the root directory of the project and add your credentials. This file stores sensitive information and should not be committed to version control.
 
     ```env
