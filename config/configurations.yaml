@@ -85,7 +85,7 @@ target_objects:
     api_name: WorkOrder                   # Salesforce object API name
     sf_operation: upsert
     external_id_field: "External_ID__c"   # SF field marked as External ID
-    old_id_column: "External_ID__c"       # can be same as external_id_field
+    old_id_column: "id"                   # can be same as external_id_field
     sql: |
       SELECT 
         * 
