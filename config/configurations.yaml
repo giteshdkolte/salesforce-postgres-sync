@@ -4,7 +4,6 @@ default_settings: &defaults
   rds_schema_name: salesforce                     # RDS Raw Layer Schema name
   rds_staging_schema_name: salesforce_staging     # RDS Staging Layer Schema name
   rds_table_prefix: salesforce                    # Prefix on the table name to handle reserved keyword
-  rds_alpha_schema: external
   src_operation: replace                          # replace, append or merge (only for Salesforce to RDS & File to RDS)
   src_merge_key: "id"                             # If src_operation = merge, provide the Primary key here
   old_id_column: "id"                             # RDS source PK — used only for our row-level logging
