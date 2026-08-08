@@ -19,14 +19,14 @@ file_to_rds:
   contact_load_excel:       # Table name in RDS
     <<: *defaults
     active_status: Y
-    file_path: "D:/project_disk_space/excel_files/contact-08_08_2026.xlsx"
+    file_path: "/home/sifi/data/excel_files/contact-08_08_2026.xlsx"    # Compatible with both window/linux/macos
     sheet_name: 0           # Sheet number in excel
     batch_size: 2000        # Batch size to load at a time
     
   account_load_csv:         # Table name in RDS
     <<: *defaults
     active_status: Y
-    file_path: "D:/project_disk_space/csv_files/ACCOUNT-08_08_2026.csv"
+    file_path: "/home/sifi/data/csv_files/ACCOUNT-08_08_2026.csv"       # Compatible with both window/linux/macos
     delimiter: ","          # Delimiter/Seperator
   
 # Salesforce to RDS

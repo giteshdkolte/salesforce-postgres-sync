@@ -84,6 +84,8 @@ This pipeline reads configurations from the `target_objects` section of the YAML
     dlt_pipeline_disk_location = "D:/dlt_data"    # In Windows
     # dlt_pipeline_disk_location = "/mnt/migration/dlt_data"    # In Linux
     ```
+  ### Note: 
+  See your file system disk space using command `df -h` and choose the mount based on the disk space and volume of data.
 
 ## Configuration (`config/configurations.yaml`)
 
