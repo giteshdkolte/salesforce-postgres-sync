@@ -1,0 +1,94 @@
+# Configurations file
+default_settings: &defaults
+  rds_db_name: salesforce_db                      # RDS DB name
+  rds_schema_name: salesforce                     # RDS Raw Layer Schema name
+  rds_staging_schema_name: salesforce_staging     # RDS Staging Layer Schema name
+  rds_table_prefix: salesforce                    # Prefix on the table name to handle reserved keyword
+  rds_alpha_schema: external
+  src_operation: replace                          # replace, append or merge (only for Salesforce to RDS & File to RDS)
+  src_merge_key: "id"                             # If src_operation = merge, provide the Primary key here
+  old_id_column: "id"                             # RDS source PK — used only for our row-level logging
+  batch_size: 1000                                # optional override, defaults to 1000
+  max_batches_per_job: 10                         # optional override, defaults to 10
+
+# File to RDS
+# file_path: Path to the source file (CSV, XLSX, or XLS)
+# sheet_name: Target sheet name or index (optional for Excel)
+# batch_size: Number of rows processed per batch (default: 5000)
+# delimiter: Delimiter for CSV; default comma [only for delimited flat files]
+file_to_rds:
+  contact_load_excel:       # Table name in RDS
+    <<: *defaults
+    active_status: Y
+    file_path: "D:/project_disk_space/excel_files/contact-08_08_2026.xlsx"
+    sheet_name: 0           # Sheet number in excel
+    batch_size: 2000        # Batch size to load at a time
+    
+  account_load_csv:         # Table name in RDS
+    <<: *defaults
+    active_status: Y
+    file_path: "D:/project_disk_space/csv_files/ACCOUNT-08_08_2026.csv"
+    delimiter: ","          # Delimiter/Seperator
+  
+# Salesforce to RDS
+# Default RDS raw layer schema is salesforce, check in default anchor
+source_objects:
+  Case:
+    <<: *defaults
+    active_status: Y
+    soql: |
+      SELECT	
+        Id, IsDeleted, MasterRecordId, CaseNumber, ContactId, AccountId, AssetId, SourceId, ParentId, SuppliedName, SuppliedEmail, SuppliedPhone, SuppliedCompany, Type, Status, Reason, Origin, Subject, Priority, Description, IsClosed, ClosedDate, IsEscalated, OwnerId, CreatedDate, CreatedById, LastModifiedDate, LastModifiedById, SystemModstamp, ContactPhone, ContactMobile, ContactEmail, ContactFax, Comments, LastViewedDate, LastReferencedDate, UserRecordAccessId, EngineeringReqNumber__c, SLAViolation__c, Product__c, PotentialLiability__c
+      FROM CASE
+    target_table: case
+
+  Opportunity:
+    <<: *defaults
+    active_status: Y
+    src_operation: append
+    soql: |
+      SELECT	
+        Id, IsDeleted, AccountId, IsPrivate, Name, Description, StageName, Amount, Probability, ExpectedRevenue, TotalOpportunityQuantity, CloseDate, Type, NextStep, LeadSource, IsClosed, IsWon, ForecastCategory, ForecastCategoryName, CampaignId, HasOpportunityLineItem, Pricebook2Id, OwnerId, CreatedDate, CreatedById, LastModifiedDate, LastModifiedById, SystemModstamp, LastActivityDate, PushCount, LastStageChangeDate, Fiscal, ContactId, LastViewedDate, LastReferencedDate, UserRecordAccessId, HasOpenActivity, HasOverdueTask, LastAmountChangedHistoryId, LastCloseDateChangedHistoryId, DeliveryInstallationStatus__c, TrackingNumber__c, OrderNumber__c, CurrentGenerators__c, MainCompetitors__c
+      FROM Opportunity
+    target_table: opportunity
+
+# RDS to Salesforce
+# Default RDS staging layer schema is salesforce_staging, check in default anchor
+# If add {{SCHEMA}} in sql, it will be replaced with rds_staging_schema_name schema
+target_objects:
+  Case:
+    <<: *defaults
+    active_status: Y
+    api_name: Case                   # Salesforce object API name
+    sf_operation: insert
+    old_id_column: "id"              # RDS PK for logging only
+    sql: |
+      SELECT 
+        * 
+      FROM {{SCHEMA}}.salesforce_case_transformed
+    target_table: salesforce_case_transformed   # Required to create the row level log table for this object
+  
+  Opportunity:
+    <<: *defaults
+    active_status: Y
+    api_name: Opportunity             # Salesforce object API name
+    sf_operation: update
+    old_id_column: "id"               # RDS PK for logging & update
+    sql: |
+      SELECT 
+        id, amount
+      FROM salesforce_staging.salesforce_opportunity_transformed
+    target_table: salesforce_opportunity_transformed
+  
+  WorkOrder:
+    <<: *defaults
+    active_status: N
+    api_name: WorkOrder                   # Salesforce object API name
+    sf_operation: upsert
+    external_id_field: "External_ID__c"   # SF field marked as External ID
+    old_id_column: "External_ID__c"       # can be same as external_id_field
+    sql: |
+      SELECT 
+        * 
+      FROM {{SCHEMA}}.wo_staging
+    target_table: wo_staging
