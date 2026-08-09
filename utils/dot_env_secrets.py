@@ -27,9 +27,3 @@ def load_env_as_dict(env_path: str = ".env") -> dict:
                 env_dict[key] = os.getenv(key, value)
 
     return env_dict
-
-
-# Example usage
-if __name__ == "__main__":
-    config = load_env_as_dict(".env")
-    print(config)
