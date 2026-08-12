@@ -279,3 +279,13 @@ rm -rf /mnt/migration/dlt_data/pipelines/sf_to_rds/
   ```
 - Only drop `{target_table_name}` if you *intend* for its schema to change or be rebuilt. **Do not drop it accidentally** — there's no automatic backup.
 - Clearing `dlt` metadata and pending packages does not affect other tables **unless** they use `append` mode. Since this project's pipelines are configured for `replace` mode, this cleanup is isolated and safe.
+
+## Advantages
+
+1. **No manual DDL required** — Target tables are created automatically based on the source data structure, eliminating the need to manually define schemas in Postgres.
+
+2. **Built on `dlt` (Data Load Tool)** — Leverages a Python library purpose-built for reliable, production-grade data loading.
+
+3. **Memory-efficient streaming** — Data is yielded and processed in batches in disk rather than being held entirely in memory, preventing Out of Memory (OOM) errors even at large scale.
+
+4. **Declarative, type-safe raw layer** — All fields in the Salesforce → Postgres raw layer are loaded as `VARCHAR`, removing the need to explicitly define target data types during staging. Since `simple_salesforce` implicitly handles type conversion on write-back, the raw `VARCHAR` fields are automatically cast to the correct Salesforce field types at load time. This lets the pipeline focus purely on data migration and transformation logic, rather than type management.
