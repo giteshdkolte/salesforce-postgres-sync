@@ -78,13 +78,26 @@ target_objects:
         id, amount
       FROM salesforce_staging.salesforce_opportunity_transformed
     target_table: salesforce_opportunity_transformed
+
+  Case_UPSERT:
+    <<: *defaults
+    active_status: Y
+    api_name: Case                        # Salesforce object API name
+    sf_operation: upsert
+    external_id_field: "id"               # SF field marked as External ID
+    old_id_column: "id"                   # RDS PK for logging only
+    sql: |
+      SELECT 
+        * 
+      FROM salesforce_staging.salesforce_case_transformed
+    target_table: salesforce_case_transformed   # Required to create the row level log table for this object
   
   WorkOrder:
     <<: *defaults
     active_status: N
     api_name: WorkOrder                   # Salesforce object API name
     sf_operation: upsert
-    external_id_field: "External_ID__c"   # SF field marked as External ID
+    external_id_field: "External_ID__c"   # SF field marked as External ID. Can be id field as well
     old_id_column: "id"                   # can be same as external_id_field
     sql: |
       SELECT 
