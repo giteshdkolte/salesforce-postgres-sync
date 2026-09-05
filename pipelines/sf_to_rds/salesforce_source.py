@@ -21,7 +21,8 @@ def get_sf_connection(
     instance_url: str,
     consumer_key: str,
     consumer_secret: str,
-    domain: str
+    domain: str,
+    version: str
 ) -> Salesforce:
     """
     Create Salesforce connection
@@ -30,7 +31,8 @@ def get_sf_connection(
         instance_url = instance_url,
         consumer_key = consumer_key,
         consumer_secret = consumer_secret,
-        domain = domain
+        domain = domain,
+        version = version
     )
 
 def extract_object(
@@ -128,12 +130,14 @@ def salesforce_source(
     consumer_key = secrets.get(f"client_id")
     consumer_secret = secrets.get(f"client_secret")
     domain = secrets.get(f"sf_domain")
+    version = source_config.get("sf_api_version", "65.0")
 
     sf = get_sf_connection(
         instance_url,
         consumer_key,
         consumer_secret,
-        domain
+        domain,
+        version
     )
 
     # Define the source level configurations
