@@ -13,6 +13,10 @@ The framework is composed of three distinct, configurable pipelines:
 *   **Configuration Driven**: All pipeline operations are controlled through a central `configurations.yaml` file, allowing for easy management of objects, queries, and settings without code changes.
 *   **Efficient Data Loading**: Utilizes the `dlt` (data load tool) library for efficient and reliable data extraction from Salesforce and files into Postgres. `dlt` is capable to work with large volume of data (millions of records) as it uses disk & batch instead of loading in memory everything.
 *   **Large Volume Support**: The Postgres-to-Salesforce pipeline is optimized for large datasets, using server-side cursors for low memory usage, and intelligent batching to work with the Salesforce Bulk API limits.
+* **Dynamic Salesforce API Version**: Salesforce API version can be configured through `sf_api_version` in `configurations.yaml`, allowing the Salesforce API version to be changed without modifying application code.
+* **Salesforce Record Deletion**: Supports deleting existing records from Salesforce objects using the `delete` operation.
+* **Automatic REST API Fallback for Time Fields**: Salesforce `Time` fields can cause JSON deserialization errors when processed through the Bulk API, particularly when source values are stored as text or even time in PostgreSQL. When `time_fields` is configured for an RDS-to-Salesforce object, the pipeline automatically uses the Salesforce REST API instead of the Bulk API for that operation.
+* **Flexible API Selection**: The RDS-to-Salesforce pipeline can use the Bulk API for high-volume operations while selectively using the REST API for objects containing Salesforce Time fields.
 *   **Detailed Auditing**: The Postgres-to-Salesforce pipeline creates detailed summary and row-level log tables in the database, tracking the status of every record pushed to Salesforce.
 *   **Data Integrity**:
     *   File loading pipelines read all data as text to prevent automatic type casting and ensure source values are perfectly preserved.
@@ -103,6 +107,7 @@ default_settings: &defaults
   rds_staging_schema_name: salesforce_staging     # For RDS->SF
   src_operation: replace                          # replace, append, merge
   batch_size: 1000
+  sf_api_version: "64.0"
 ```
 
 ### Salesforce to Postgres (`source_objects`)
@@ -157,15 +162,30 @@ file_to_rds:
 ```
 
 ### Postgres to Salesforce (`target_objects`)
+
+Pushes data from PostgreSQL staging tables to Salesforce objects using the appropriate Salesforce API based on the configured operation and data requirements.
+
+Supported operations include:
+
+- `insert`
+- `update`
+- `upsert`
+- `delete`
+
+The pipeline primarily uses the Salesforce Bulk API for large-volume operations. For Salesforce `Time` fields, the pipeline can automatically fall back to the REST API when `time_fields` are configured, avoiding Bulk API JSON deserialization issues/bug with time values stored as text in PostgreSQL.
+
 Define each object you want to push data to.
 
-- `active_status`: `Y` to enable, `N` to disable.
-- `api_name`: The API name of the target Salesforce object (e.g., `Case`).
-- `sf_operation`: `insert`, `update`, or `upsert`.
-- `sql`: The SQL query to select data from your Postgres staging table. You can use `{{SCHEMA}}` as a placeholder for the `rds_staging_schema_name`.
-- `old_id_column`: The primary key from your source Postgres table, used for logging and for matching records during an `update`.
-- `external_id_field` (for `upsert` only): The API name of the External ID field in Salesforce.
-- `target_table`: The name of the source Postgres table. This is used to create the corresponding row-level log table.
+| Parameter | Required | Description |
+|---|---|---|
+| `active_status` | Yes | `Y` to enable, `N` to disable the object. |
+| `api_name` | Yes | Salesforce API name of the target object. |
+| `sf_operation` | Yes | Operation to perform: `insert`, `update`, `upsert`, or `delete`. |
+| `sql` | Yes* | SQL query used to select records from PostgreSQL. Not required for operations where records are identified directly for deletion, depending on implementation. |
+| `old_id_column` | Depends | PostgreSQL column containing the Salesforce record ID or source identifier used for logging/matching. |
+| `external_id_field` | For `upsert` | Salesforce External ID field used for upsert operations. |
+| `target_table` | Yes | PostgreSQL source table name used for row-level audit logging. |
+| `time_fields` | No | List of Salesforce fields whose target type is `Time`. When configured, the pipeline uses the Salesforce REST API instead of the Bulk API to avoid Bulk API JSON deserialization issues with time values stored as text in PostgreSQL. |
 
 ```yaml
 target_objects:
@@ -189,7 +209,33 @@ target_objects:
       SELECT id, amount
       FROM salesforce_staging.salesforce_opportunity_transformed
     target_table: salesforce_opportunity_transformed
+
+  target_objects:
+    BusinessHours:
+      <<: *defaults
+      active_status: Y
+      api_name: BusinessHours
+      sf_operation: update
+      old_id_column: "id"
+
+      time_fields:
+        - StartTime
+        - EndTime
+
+      sql: |
+        SELECT
+            id,
+            starttime,
+            endtime
+        FROM {{SCHEMA}}.business_hours_transformed
+
+      target_table: business_hours_transformed
 ```
+
+
+
+
+
 
 ## Usage
 
@@ -289,3 +335,19 @@ rm -rf /mnt/migration/dlt_data/pipelines/sf_to_rds/
 3. **Memory-efficient streaming** — Data is yielded and processed in batches in disk rather than being held entirely in memory, preventing Out of Memory (OOM) errors even at large scale.
 
 4. **Declarative, type-safe raw layer** — All fields in the Salesforce → Postgres raw layer are loaded as `VARCHAR`, removing the need to explicitly define target data types during staging. Since `simple_salesforce` implicitly handles type conversion on write-back, the raw `VARCHAR` fields are automatically cast to the correct Salesforce field types at load time. This lets the pipeline focus purely on data migration and transformation logic, rather than type management.
+
+## Recent Enhancements
+
+### Dynamic Salesforce API Version
+Added support for configuring the Salesforce API version through `sf_api_version` in `configurations.yaml`.
+
+### Salesforce Record Deletion
+Added support for deleting records from Salesforce objects using the `delete` operation.
+
+### Salesforce Time Field Handling
+Added support for `time_fields` in RDS-to-Salesforce configurations.
+
+Salesforce `Time` fields can cause JSON deserialization errors when processed through the Bulk API, particularly when the PostgreSQL source value is stored as text. When these fields are configured through `time_fields`, the pipeline automatically uses the REST API instead.
+
+### Bulk API Time Field Fix
+Resolved an issue where Salesforce objects containing `Time` fields could fail during RDS-to-Salesforce loads with JSON deserialization errors.
