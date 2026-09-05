@@ -31,14 +31,16 @@ def get_sf_connection(
     instance_url: str,
     consumer_key: str,
     consumer_secret: str,
-    domain: str
+    domain: str,
+    version: str
 ) -> Salesforce:
     """Create Salesforce connection"""
     return Salesforce(
         instance_url    = instance_url,
         consumer_key    = consumer_key,
         consumer_secret = consumer_secret,
-        domain          = domain
+        domain          = domain,
+        version         = version
     )
 
 def prepare_payload(
@@ -55,6 +57,8 @@ def prepare_payload(
     upsert :
         if id_column == external_id_field → KEEP it (SF needs it to match)
         if id_column != external_id_field → STRIP it (only for logging)
+    delete : ONLY send {"Id": value} — SF Bulk delete needs nothing else
+             id_column MUST hold the actual Salesforce record Id
     """
     payload = []
     old_ids = []
@@ -62,6 +66,13 @@ def prepare_payload(
     for record in records:
         old_id = record.get(id_column)
         old_ids.append(old_id)
+
+        # ── DELETE: build minimal payload — Id only ────────────────────
+        if method == "delete":
+            row = {"Id": old_id}
+            payload.append(row)
+            continue
+
         row = dict(record)
 
         if method == "insert":
@@ -87,6 +98,8 @@ def push_batch_to_sf(
     id_column: str,
     ext_id_field: str = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    hard_delete: bool = False,
+    time_fields=None,
 ) -> list:
     """
     Prepares and pushes one job buffer to Salesforce via Bulk API.
@@ -94,12 +107,48 @@ def push_batch_to_sf(
 
     records      : accumulated RDS rows for this job (multiple partitions)
     id_column    : RDS PK column — used for logging, handled per method
+                   for delete → MUST be the Salesforce record Id column
     ext_id_field : required for upsert — SF field to match on
+    hard_delete  : only used when method='delete'
+                   True  → permanent delete (bypasses Recycle Bin)
+                   False → soft delete (goes to Recycle Bin, default)
     Returns      : list of row result dicts → old_id, new_id, status, error_message
     """
-    bulk_obj         = getattr(sf.bulk, sf_object)
     payload, old_ids = prepare_payload(records, method, id_column, ext_id_field)
 
+    # ── REST loop path for objects containing Time fields ──────────────
+    if time_fields:
+        sf_proxy = getattr(sf, sf_object)
+        row_results = []
+        for old_id, row in zip(old_ids, payload):
+            try:
+                if method == "insert":
+                    resp = sf_proxy.create(row)
+                    row_results.append({
+                        "old_id": old_id, "new_id": resp.get("id"),
+                        "status": "SUCCESS" if resp.get("success") else "FAILED",
+                        "error_message": None if resp.get("success") else str(resp),
+                    })
+                elif method == "update":
+                    rec_id = row.pop("Id")
+                    sf_proxy.update(rec_id, row)
+                    row_results.append({"old_id": old_id, "new_id": rec_id, "status": "SUCCESS", "error_message": None})
+                elif method == "upsert":
+                    ext_val = row.get(ext_id_field)
+                    sf_proxy.upsert(f"{ext_id_field}/{ext_val}", row)
+                    row_results.append({"old_id": old_id, "new_id": None, "status": "SUCCESS", "error_message": None})
+                elif method == "delete":
+                    if hard_delete:
+                        sf.restful(f"sobjects/{sf_object}/{row['Id']}?hardDelete=true", method="DELETE")
+                    else:
+                        sf_proxy.delete(row["Id"])
+                    row_results.append({"old_id": old_id, "new_id": None, "status": "SUCCESS", "error_message": None})
+            except Exception as e:
+                row_results.append({"old_id": old_id, "new_id": None, "status": "FAILED", "error_message": str(e)})
+        return row_results
+
+    # ── Existing sf.bulk (Bulk 1.0 JSON) path — unchanged for all other objects ──
+    bulk_obj = getattr(sf.bulk, sf_object)
     try:
         if method == "insert":
             results = bulk_obj.insert(payload, batch_size=batch_size, use_serial=True)
@@ -107,38 +156,22 @@ def push_batch_to_sf(
             results = bulk_obj.update(payload, batch_size=batch_size, use_serial=True)
         elif method == "upsert":
             results = bulk_obj.upsert(payload, ext_id_field, batch_size=batch_size, use_serial=True)
+        elif method == "delete":
+            results = bulk_obj.hard_delete(payload, batch_size=batch_size, use_serial=True) if hard_delete \
+                      else bulk_obj.delete(payload, batch_size=batch_size, use_serial=True)
         else:
-            raise ValueError(f"Unsupported method: '{method}'. Use insert / update / upsert.")
-
+            raise ValueError(f"Unsupported method: '{method}'.")
     except Exception as e:
-        # Whole job failed at API level — mark every row as failed
-        return [{
-            "old_id": old_id, "new_id": None,
-            "status": "FAILED", "error_message": str(e)
-        } for old_id in old_ids]
+        return [{"old_id": oid, "new_id": None, "status": "FAILED", "error_message": str(e)} for oid in old_ids]
 
-    # ── Map per-row SF results back ───────────────────────────────────────
     row_results = []
     for old_id, res in zip(old_ids, results):
         if res.get("success"):
-            row_results.append({
-                "old_id":        old_id,
-                "new_id":        res.get("id"),
-                "status":        "SUCCESS",
-                "error_message": None,
-            })
+            row_results.append({"old_id": old_id, "new_id": res.get("id"), "status": "SUCCESS", "error_message": None})
         else:
-            errors  = res.get("errors", [])
-            err_msg = "; ".join(
-                f"{e.get('statusCode')}: {e.get('message')}"
-                for e in errors
-            ) if errors else "Unknown error"
-            row_results.append({
-                "old_id":        old_id,
-                "new_id":        None,
-                "status":        "FAILED",
-                "error_message": err_msg,
-            })
+            errors = res.get("errors", [])
+            err_msg = "; ".join(f"{e.get('statusCode')}: {e.get('message')}" for e in errors) if errors else "Unknown error"
+            row_results.append({"old_id": old_id, "new_id": None, "status": "FAILED", "error_message": err_msg})
     return row_results
 
 def _write_row_batch(
@@ -196,6 +229,7 @@ def run_rds_to_salesforce(objects_to_load: list = None) -> str:
             started_at = datetime.now()
 
             # ── Read config ───────────────────────────────────────────────
+            version             = v.get("sf_api_version", "65.0")
             schema              = v.get("rds_staging_schema_name")
             db_name             = v.get("rds_db_name")
             sf_object           = v.get("api_name")
@@ -205,6 +239,8 @@ def run_rds_to_salesforce(objects_to_load: list = None) -> str:
             target_table        = v.get("target_table")
             batch_size          = v.get("batch_size", DEFAULT_BATCH_SIZE)
             max_batches_per_job = v.get("max_batches_per_job", MAX_BATCHES_PER_JOB)
+            hard_delete         = bool(v.get("hard_delete", False))
+            time_fields         = v.get("time_fields", None)
             conn_str            = f"{secrets.get(f'pg_connection_string')}/{db_name}"
 
             # ── Replace {{SCHEMA}} placeholder in SQL ─────────────────────
@@ -232,8 +268,10 @@ def run_rds_to_salesforce(objects_to_load: list = None) -> str:
                         raise ValueError("'api_name' is required in YAML config")
                     if method == "upsert" and not ext_id_field:
                         raise ValueError("'external_id_field' is required for upsert")
-                    if method not in ("insert", "update", "upsert"):
+                    if method not in ("insert", "update", "upsert", "delete"):
                         raise ValueError(f"Invalid sf_operation: '{method}'")
+                    if method == "delete" and not id_column:
+                        raise ValueError("'old_id_column' is required for delete — must hold the Salesforce record Id")
 
                     # ── Ensure RDS log tables ─────────────────────────────────
                     row_table = ensure_log_tables(conn_str, schema, target_table)
@@ -249,7 +287,8 @@ def run_rds_to_salesforce(objects_to_load: list = None) -> str:
                         instance_url    = secrets.get(f"url"),
                         consumer_key    = secrets.get(f"client_id"),
                         consumer_secret = secrets.get(f"client_secret"),
-                        domain          = secrets.get(f"sf_domain")
+                        domain          = secrets.get(f"sf_domain"),
+                        version         = version
                     )
 
                     # ── SQLAlchemy engine with server-side cursor ─────────────
@@ -275,6 +314,8 @@ def run_rds_to_salesforce(objects_to_load: list = None) -> str:
                     logger.info(f"   Rows per SF Job    : {batch_size * max_batches_per_job:,}")
                     if method == "upsert":
                         logger.info(f"   Ext ID Field       : {ext_id_field}")
+                    if method == "delete":
+                        logger.info(f"   Delete Mode        : {'HARD DELETE (permanent)' if hard_delete else 'SOFT DELETE (recycle bin)'}")
                     logger.info(f"{'='*60}")
 
                     run_id          = str(uuid.uuid4())
@@ -310,6 +351,7 @@ def run_rds_to_salesforce(objects_to_load: list = None) -> str:
                                     sf=sf, sf_object=sf_object, method=method,
                                     records=job_buffer, id_column=id_column,
                                     ext_id_field=ext_id_field, batch_size=batch_size,
+                                    hard_delete=hard_delete, time_fields=time_fields
                                 )
 
                                 batch_success  = sum(1 for r in row_results if r["status"] == "SUCCESS")
@@ -348,6 +390,7 @@ def run_rds_to_salesforce(objects_to_load: list = None) -> str:
                                 sf=sf, sf_object=sf_object, method=method,
                                 records=job_buffer, id_column=id_column,
                                 ext_id_field=ext_id_field, batch_size=batch_size,
+                                hard_delete=hard_delete, time_fields=time_fields,
                             )
 
                             batch_success  = sum(1 for r in row_results if r["status"] == "SUCCESS")

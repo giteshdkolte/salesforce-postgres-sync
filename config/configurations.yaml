@@ -1,5 +1,6 @@
 # Configurations file
 default_settings: &defaults
+  sf_api_version: "65.0"                          # Default version is 65.0
   rds_db_name: salesforce_db                      # RDS DB name
   rds_schema_name: salesforce                     # RDS Raw Layer Schema name
   rds_staging_schema_name: salesforce_staging     # RDS Staging Layer Schema name
@@ -104,3 +105,28 @@ target_objects:
         * 
       FROM {{SCHEMA}}.wo_staging
     target_table: wo_staging
+
+  Opportunity_delete:
+    <<: *defaults
+    active_status: Y
+    api_name: Opportunity             # Salesforce object API name
+    sf_operation: delete
+    hard_delete: False                # hard_delete=False do the soft-delete and data will be there in bin for 15 days, while hard_delete=True will do permanently delete
+    old_id_column: "id"               # Id is mandatory. It need only Id and no other fields
+    sql: |
+      SELECT 
+        id
+      FROM salesforce_staging.salesforce_opportunity_del
+    target_table: salesforce_opportunity_del
+
+  TimeSlot:
+    <<: *defaults
+    time_fields: [starttime, endtime]
+    active_status: Y
+    api_name: TimeSlot               # Salesforce object API name
+    sf_operation: insert
+    old_id_column: "id"              # RDS PK for logging only
+    sql: |
+      SELECT dayofweek, type, starttime, endtime, operatinghoursid
+      FROM salesforce_staging.timeslot_stage_load
+    target_table: salesforce_case_transformed   # Required to create the row level log table for this object
